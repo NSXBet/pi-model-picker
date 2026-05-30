@@ -23,11 +23,73 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 ```
 
 - **Active model** shown with `●` and highlighted in green
+- **Favorite models** shown with `★`; press `Ctrl+F` to toggle favorites
+- **Hidden models** shown in the `Hidden` tab with `◌`; press `Ctrl+H` to hide/unhide models
 - **Context window** shown as `200k`, `1M`, etc.
 - **Capability tags**: `thinking` (extended reasoning), `vision` (image input)
 - **Search** filters by model name or id within the current category
 - **Search term preserved** per category — switch away and back, your query is still there
 - **Wraparound navigation** — `↑` on the first item jumps to the last, and vice versa
+- **Dynamic provider discovery** — auto-register models from any OpenAI-compatible `/models` endpoint via `pi-model-picker.json` (see below)
+
+## Dynamic provider discovery
+
+Besides picking from configured models, the extension can discover models from
+any OpenAI-compatible provider at startup. Configure providers once in a
+`pi-model-picker.json` file and every model returned by their `/models` endpoint
+is registered automatically (no hand-listing in `models.json`).
+
+The file is looked up, first match wins, in:
+
+1. `./.pi/extensions/pi-model-picker.json` (project)
+2. `~/.pi/agent/extensions/pi-model-picker.json` (global)
+3. `./.pi/pi-model-picker.json`
+4. `~/.pi/pi-model-picker.json`
+
+```json
+{
+  "modelProviders": [
+    {
+      "name": "bedrock-mantle",
+      "baseUrl": "https://bedrock-mantle.us-east-1.api.aws/v1",
+      "api": "openai-completions",
+      "apiKey": "!op read op://Private/bedrock-envs/production/AWS_BEARER_TOKEN_BEDROCK",
+      "authHeader": true,
+      "filter": "",
+      "reasoningFilter": "kimi|glm|gpt-5|qwen3|claude|deepseek|minimax",
+      "defaults": { "contextWindow": 262144, "maxTokens": 32000, "input": ["text"] }
+    }
+  ]
+}
+```
+
+Per-provider fields:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Provider id shown as a picker category |
+| `baseUrl` | Base URL; `/models` (or `modelsPath`) is appended for discovery |
+| `api` | Pi API type (default `openai-completions`) |
+| `apiKey` | `!command` (runs shell, uses stdout), `$VAR`/`${VAR}` (env), or a literal |
+| `authHeader` | Send `Authorization: Bearer` on chat requests (default `true`) |
+| `headers` | Extra request headers |
+| `filter` | Regex on model id; only matching ids are registered (empty = all) |
+| `reasoningFilter` | Regex on model id; matches get `reasoning: true` |
+| `modelsPath` | Discovery path (default `/models`) |
+| `defaults` | Fallback `contextWindow` / `maxTokens` / `input` / `cost` / `reasoning` |
+| `cacheTtlSeconds` | Reuse discovered results this long (default 12h) |
+
+Discovery results and the resolved key are cached under the OS temp dir at
+`$TMPDIR/pi-model-picker/discovery-cache.json` (mode `0600`) so `apiKey`
+commands and network calls only run when the cache is older than the TTL. A
+failed refresh falls back to the stale cache instead of dropping the provider.
+
+If a provider can't be discovered at all (e.g. a missing/invalid `apiKey` giving
+a `401`, or an unreachable endpoint), it's skipped and a warning is shown when
+the session starts — `model-picker: provider skipped — <name>: <reason>` — so a
+silently-missing provider is easy to diagnose. Details also go to stderr
+(visible via `pi --list-models`).
+
 
 ## Install
 
@@ -79,6 +141,8 @@ Restart pi.
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |
+| `Ctrl+F` | Toggle favorite for highlighted model |
+| `Ctrl+H` | Hide/unhide highlighted model |
 | `Enter` | Select highlighted model |
 | `Esc` | Cancel |
 
