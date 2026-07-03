@@ -752,6 +752,7 @@ type ProviderSpec = {
 	modelsPath?: string; // default "/models"
 	defaults?: ModelDefaults;
 	cacheTtlSeconds?: number; // how long to reuse the cached discovery (default 12h)
+	models?: unknown[]; // static model list; when present, skip /models discovery entirely
 };
 
 const ZERO_COST: Cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -892,6 +893,23 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 	const failures: string[] = [];
 	for (const spec of loadSpecs()) {
 		if (!spec?.name || !spec?.baseUrl) continue;
+
+		// Static list wins: some gateways' /models advertises models the token
+		// can't actually call (and hides the ones it can), so allow listing them
+		// directly and skip discovery.
+		if (Array.isArray(spec.models) && spec.models.length > 0) {
+			pi.registerProvider(spec.name, {
+				name: spec.name,
+				baseUrl: spec.baseUrl,
+				api: spec.api ?? "openai-completions",
+				apiKey: resolveConfigValue(spec.apiKey) ?? "",
+				authHeader: spec.authHeader ?? true,
+				headers: spec.headers,
+				models: spec.models,
+			});
+			continue;
+		}
+
 		const resolved = await resolveProvider(spec);
 		if (!resolved.ok) {
 			failures.push(resolved.error);
