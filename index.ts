@@ -898,6 +898,17 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 		// can't actually call (and hides the ones it can), so allow listing them
 		// directly and skip discovery.
 		if (Array.isArray(spec.models) && spec.models.length > 0) {
+			// Fill required fields (cost especially) so a lean config can list just
+			// id/name without pi crashing on model.cost.input etc.
+			const models = (spec.models as Record<string, unknown>[]).map((m) => ({
+				reasoning: false,
+				input: ["text"],
+				cost: ZERO_COST,
+				contextWindow: spec.defaults?.contextWindow ?? 128000,
+				maxTokens: spec.defaults?.maxTokens ?? 8192,
+				name: m.id,
+				...m,
+			}));
 			pi.registerProvider(spec.name, {
 				name: spec.name,
 				baseUrl: spec.baseUrl,
@@ -905,7 +916,7 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 				apiKey: resolveConfigValue(spec.apiKey) ?? "",
 				authHeader: spec.authHeader ?? true,
 				headers: spec.headers,
-				models: spec.models,
+				models,
 			});
 			continue;
 		}
