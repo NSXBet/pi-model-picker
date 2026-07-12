@@ -29,7 +29,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
@@ -802,7 +802,9 @@ function resolveConfigValue(value: string | undefined): string | undefined {
 }
 
 function loadSpecs(): ProviderSpec[] {
+	const target = join(STORAGE_DIR, "config.json");
 	const candidates = [
+		target,
 		join(process.cwd(), ".pi", "extensions", "pi-model-picker.json"),
 		join(homedir(), ".pi", "agent", "extensions", "pi-model-picker.json"),
 		join(process.cwd(), ".pi", "pi-model-picker.json"),
@@ -810,8 +812,15 @@ function loadSpecs(): ProviderSpec[] {
 	];
 	for (const c of candidates) {
 		try {
-			const cfg = JSON.parse(readFileSync(c, "utf8"));
-			if (Array.isArray(cfg.modelProviders)) return cfg.modelProviders as ProviderSpec[];
+			const raw = readFileSync(c, "utf8");
+			const cfg = JSON.parse(raw);
+			if (!Array.isArray(cfg.modelProviders)) continue;
+			if (c !== target && !existsSync(target)) {
+				mkdirSync(STORAGE_DIR, { recursive: true });
+				writeFileSync(target, raw, "utf8");
+				try { unlinkSync(c); } catch {}
+			}
+			return cfg.modelProviders as ProviderSpec[];
 		} catch {
 			// keep looking
 		}

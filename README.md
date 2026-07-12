@@ -41,10 +41,11 @@ is registered automatically (no hand-listing in `models.json`).
 
 The file is looked up, first match wins, in:
 
-1. `./.pi/extensions/pi-model-picker.json` (project)
-2. `~/.pi/agent/extensions/pi-model-picker.json` (global)
-3. `./.pi/pi-model-picker.json`
-4. `~/.pi/pi-model-picker.json`
+1. `~/.pi/agent/extensions/pi-model-picker/config.json` (global, in extension folder)
+2. `./.pi/extensions/pi-model-picker.json` (project)
+3. `~/.pi/agent/extensions/pi-model-picker.json` (global)
+4. `./.pi/pi-model-picker.json`
+5. `~/.pi/pi-model-picker.json`
 
 ```json
 {
