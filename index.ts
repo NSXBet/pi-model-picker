@@ -753,6 +753,7 @@ type ProviderSpec = {
 	defaults?: ModelDefaults;
 	cacheTtlSeconds?: number; // how long to reuse the cached discovery (default 12h)
 	models?: unknown[]; // static model list; when present, skip /models discovery entirely
+	compat?: Record<string, unknown>; // pi provider compat flags (e.g. supportsDeveloperRole)
 };
 
 const ZERO_COST: Cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -916,6 +917,7 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 				contextWindow: spec.defaults?.contextWindow ?? 128000,
 				maxTokens: spec.defaults?.maxTokens ?? 8192,
 				name: m.id,
+				...(spec.compat ? { compat: spec.compat } : {}),
 				...m,
 			}));
 			pi.registerProvider(spec.name, {
@@ -944,7 +946,9 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 			apiKey: resolved.apiKey,
 			authHeader: spec.authHeader ?? true,
 			headers: spec.headers,
-			models: resolved.models,
+			models: spec.compat
+				? (resolved.models as Record<string, unknown>[]).map((m) => ({ ...m, compat: spec.compat }))
+				: resolved.models,
 		});
 	}
 	return failures;
