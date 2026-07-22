@@ -753,6 +753,7 @@ type ProviderSpec = {
 	defaults?: ModelDefaults;
 	cacheTtlSeconds?: number; // how long to reuse the cached discovery (default 12h)
 	models?: unknown[]; // static model list; when present, skip /models discovery entirely
+	extraModels?: Record<string, unknown> | unknown[]; // manual models ADDED on top of /models discovery (models.dev nested schema or flat)
 	compat?: Record<string, unknown>; // pi provider compat flags (e.g. supportsDeveloperRole)
 };
 
@@ -897,6 +898,56 @@ async function resolveProvider(
 	}
 }
 
+// Normalize `extraModels` (models.dev nested schema OR flat pi shape) into the
+// pi provider model shape. Lets a config list models the gateway's /models
+// endpoint hides. Key may be "provider/id" or just "id".
+function normalizeExtraModels(spec: ProviderSpec): Record<string, unknown>[] {
+	const raw = spec.extraModels;
+	if (!raw) return [];
+	const d = spec.defaults ?? {};
+	const entries: [string, Record<string, any>][] = Array.isArray(raw)
+		? raw.map((m) => [String((m as any)?.id ?? ""), m as Record<string, any>])
+		: Object.entries(raw as Record<string, Record<string, any>>);
+
+	return entries
+		.map(([key, m]) => {
+			const id = String(m.id ?? key).split("/").pop() ?? "";
+			if (!id) return null;
+			const input = ((m.modalities?.input ?? m.input ?? d.input ?? ["text"]) as string[]).filter(
+				(x) => x === "text" || x === "image",
+			);
+			const c = m.cost;
+			const cost = c
+				? {
+						input: c.input ?? 0,
+						output: c.output ?? 0,
+						cacheRead: c.cacheRead ?? c.cache_read ?? 0,
+						cacheWrite: c.cacheWrite ?? c.cache_write ?? 0,
+					}
+				: (d.cost ?? ZERO_COST);
+			return {
+				id,
+				name: m.name ?? id,
+				reasoning: m.reasoning ?? d.reasoning ?? false,
+				input: input.length ? input : ["text"],
+				cost,
+				contextWindow: m.limit?.context ?? m.contextWindow ?? d.contextWindow ?? 128000,
+				maxTokens: m.limit?.output ?? m.maxTokens ?? d.maxTokens ?? 8192,
+				...(spec.compat ? { compat: spec.compat } : {}),
+			} as Record<string, unknown>;
+		})
+		.filter((m): m is Record<string, unknown> => m !== null);
+}
+
+// Merge discovered models with manual extras; extras override on id collision.
+function mergeModels(base: unknown[], extra: Record<string, unknown>[]): unknown[] {
+	if (extra.length === 0) return base;
+	const byId = new Map<string, unknown>();
+	for (const m of base as Record<string, unknown>[]) byId.set(String(m.id), m);
+	for (const m of extra) byId.set(String(m.id), m);
+	return [...byId.values()];
+}
+
 // Returns discovery failures (one message per provider that could not be
 // registered) so the caller can surface them to the user.
 async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> {
@@ -904,13 +955,16 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 	for (const spec of loadSpecs()) {
 		if (!spec?.name || !spec?.baseUrl) continue;
 
-		// Static list wins: some gateways' /models advertises models the token
-		// can't actually call (and hides the ones it can), so allow listing them
+		let baseModels: unknown[];
+		let apiKey: string;
+
+		// Static list wins over discovery: some gateways' /models advertises models
+		// the token can't call (and hides the ones it can), so allow listing them
 		// directly and skip discovery.
 		if (Array.isArray(spec.models) && spec.models.length > 0) {
 			// Fill required fields (cost especially) so a lean config can list just
 			// id/name without pi crashing on model.cost.input etc.
-			const models = (spec.models as Record<string, unknown>[]).map((m) => ({
+			baseModels = (spec.models as Record<string, unknown>[]).map((m) => ({
 				reasoning: false,
 				input: ["text"],
 				cost: ZERO_COST,
@@ -920,35 +974,35 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 				...(spec.compat ? { compat: spec.compat } : {}),
 				...m,
 			}));
-			pi.registerProvider(spec.name, {
-				name: spec.name,
-				baseUrl: spec.baseUrl,
-				api: spec.api ?? "openai-completions",
-				apiKey: resolveConfigValue(spec.apiKey) ?? "",
-				authHeader: spec.authHeader ?? true,
-				headers: spec.headers,
-				models,
-			});
-			continue;
+			apiKey = resolveConfigValue(spec.apiKey) ?? "";
+		} else {
+			const resolved = await resolveProvider(spec);
+			if (resolved.ok) {
+				baseModels = spec.compat
+					? (resolved.models as Record<string, unknown>[]).map((m) => ({ ...m, compat: spec.compat }))
+					: resolved.models;
+				apiKey = resolved.apiKey;
+			} else {
+				// Discovery failed. If manual extras exist, still register just those
+				// (that's the point of extraModels — models the gateway won't advertise).
+				failures.push(resolved.error);
+				if (!spec.extraModels) continue;
+				baseModels = [];
+				apiKey = resolveConfigValue(spec.apiKey) ?? "";
+			}
 		}
 
-		const resolved = await resolveProvider(spec);
-		if (!resolved.ok) {
-			failures.push(resolved.error);
-			continue;
-		}
-		// Register with the already-resolved key (literal) so pi never re-runs the
-		// `!op read` per request either — credentials are fetched only on refresh.
+		const models = mergeModels(baseModels, normalizeExtraModels(spec));
+		if ((models as unknown[]).length === 0) continue;
+
 		pi.registerProvider(spec.name, {
 			name: spec.name,
 			baseUrl: spec.baseUrl,
 			api: spec.api ?? "openai-completions",
-			apiKey: resolved.apiKey,
+			apiKey,
 			authHeader: spec.authHeader ?? true,
 			headers: spec.headers,
-			models: spec.compat
-				? (resolved.models as Record<string, unknown>[]).map((m) => ({ ...m, compat: spec.compat }))
-				: resolved.models,
+			models,
 		});
 	}
 	return failures;
