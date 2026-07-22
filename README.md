@@ -94,31 +94,18 @@ silently-missing provider is easy to diagnose. Details also go to stderr
 
 ## Install
 
-### Via npm (recommended)
-
-```bash
-npm install -g pi-model-picker
-pi-model-picker
-```
-
-Restart pi after installation.
-
-### Via pi package manager
-
-```bash
-pi install npm:pi-model-picker
-```
-
 ### Via git
 
 ```bash
 pi install git:github.com/rilham97/pi-model-picker
 ```
 
+Restart pi after installation.
+
 ### Manual
 
 ```bash
-git clone https://github.com/rilham97/pi-model-picker.git \
+git clone https://github.com/nsxbet/pi-model-picker.git \
   ~/.pi/agent/extensions/model-picker
 ```
 
@@ -154,7 +141,7 @@ The picker calls `modelRegistry.refresh()` then `modelRegistry.getAvailable()` â
 ## Uninstall
 
 ```bash
-pi remove npm:pi-model-picker
+pi remove git:github.com/rilham97/pi-model-picker
 rm -rf ~/.pi/agent/extensions/model-picker
 ```
 
