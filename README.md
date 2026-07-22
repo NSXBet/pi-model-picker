@@ -97,7 +97,7 @@ silently-missing provider is easy to diagnose. Details also go to stderr
 ### Via git
 
 ```bash
-pi install git:github.com/rilham97/pi-model-picker
+pi install git:github.com/nsxbet/pi-model-picker
 ```
 
 Restart pi after installation.
