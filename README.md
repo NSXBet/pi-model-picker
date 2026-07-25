@@ -23,7 +23,8 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 ```
 
 - **Active model** shown with `●` and highlighted in green
-- **Favorite models** shown with `★`; press `Ctrl+F` to toggle favorites
+- **Favorite models** shown with `★`; press `Ctrl+F` to toggle favorites — this **is** Pi's native Ctrl+P model scope (restart Pi to apply changes; see [Favorites and Ctrl+P](#favorites-and-ctrlp))
+- **Stale favorites** — favorites that no longer match an available model stay listed at the end of the Favorites tab, dimmed with a red `✗ stale` marker; press `Ctrl+F` on one to drop it (see [Favorites and Ctrl+P](#favorites-and-ctrlp))
 - **Hidden models** shown in the `Hidden` tab with `◌`; press `Ctrl+H` to hide/unhide models
 - **Context window** shown as `200k`, `1M`, etc.
 - **Capability tags**: `thinking` (extended reasoning), `vision` (image input)
@@ -31,6 +32,19 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 - **Search term preserved** per category — switch away and back, your query is still there
 - **Wraparound navigation** — `↑` on the first item jumps to the last, and vice versa
 - **Dynamic provider discovery** — auto-register models from any OpenAI-compatible `/models` endpoint via `pi-model-picker.json` (see below)
+
+## Favorites and Ctrl+P
+
+Favorites **are** Pi's native scoped-models scope — there is no separate list. The Favorites tab reads and writes Pi's `enabledModels` setting directly, the same scope you see in `/scoped-models` and cycle through with `Ctrl+P` / `Shift+Ctrl+P`.
+
+How it works:
+
+- Pressing `Ctrl+F` rewrites `enabledModels` as exact `provider/model` entries, preserving order — that order is the Ctrl+P cycling order
+- Editing the scope in `/scoped-models` (and saving with `Ctrl+S`) **is** editing your favorites — the tab reflects it on next open. One list, two editors
+- A favorite that no longer resolves to an available model (provider renamed, model removed, auth missing) is kept but shown dimmed with a red `✗ stale` marker at the end of the Favorites tab. It also keeps generating `Warning: No models match pattern ...` at startup until you drop it with `Ctrl+F` on the stale row
+- Wildcard patterns written by `/scoped-models` (e.g. `claude-*`) can't map to one model row, so they still cycle with Ctrl+P but don't appear in the Favorites tab
+
+**Changes need a hard reload: quit and restart Pi.** Pi resolves `enabledModels` into the live Ctrl+P scope only at startup. `/reload` reloads settings and extensions but keeps the old cycling scope in memory, so after toggling favorites, restart Pi before expecting Ctrl+P to follow the new list.
 
 ## Dynamic provider discovery
 
@@ -116,6 +130,7 @@ Restart pi.
 | Trigger | Description |
 |---------|-------------|
 | `/models` | Open the categorized picker |
+| `/models <favorite>` | Switch directly to a favorite; `Tab` autocompletes favorite names (`/models gpt<Tab>`). With no exact match, the first partial match is used |
 | `Ctrl+Shift+M` | Keyboard shortcut |
 
 > **Note:** `/model` is a built-in pi command and cannot be overridden. Use `/models` (with an `s`) for this picker. The built-in `/model` (flat search) continues to work as normal.

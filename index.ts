@@ -25,7 +25,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawnSync } from "node:child_process";
@@ -33,6 +33,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
+import { favoriteKeysToPatterns, filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys } from "./settings";
 
 // ─── list persistence ──────────────────────────────────────────────────────
 
@@ -40,7 +41,6 @@ const FAVORITES_CATEGORY = "★ Favorites";
 const HIDDEN_CATEGORY = "◌ Hidden";
 const ALL_CATEGORY = "✓ All";
 const STORAGE_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-model-picker");
-const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
 const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
 
 function modelKey(m: Model<Api>): string {
@@ -58,21 +58,32 @@ function loadModelKeys(file: string): Set<string> {
 	}
 }
 
-function saveModelKeys(file: string, keys: Set<string>): void {
+function saveModelKeys(file: string, keys: Set<string>): boolean {
 	try {
 		mkdirSync(dirname(file), { recursive: true });
 		writeFileSync(file, JSON.stringify([...keys], null, 2), "utf8");
+		return true;
 	} catch {
-		// best-effort persistence; ignore disk errors
+		return false;
 	}
 }
 
 function loadFavorites(): Set<string> {
-	return loadModelKeys(FAVORITES_FILE);
+	try {
+		const settings = SettingsManager.create(process.cwd(), getAgentDir());
+		return new Set(patternsToFavoriteKeys(settings.getEnabledModels() ?? []));
+	} catch {
+		return new Set();
+	}
 }
 
-function saveFavorites(favs: Set<string>): void {
-	saveModelKeys(FAVORITES_FILE, favs);
+function saveFavorites(favs: Set<string>): boolean {
+	try {
+		SettingsManager.create(process.cwd(), getAgentDir()).setEnabledModels(favoriteKeysToPatterns(favs));
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function loadHidden(): Set<string> {
@@ -102,11 +113,18 @@ function fmtCtx(tokens: number): string {
 
 // ─── component ──────────────────────────────────────────────────────────────
 
+type RowModel = Model<Api> | { key: string; invalid: true };
+
+function isInvalidRow(row: RowModel): row is { key: string; invalid: true } {
+	return "invalid" in row;
+}
+
 interface ModelPickerOptions {
 	allModels: Model<Api>[];
 	currentModel: Model<Api> | undefined;
 	onSelect: (model: Model<Api>) => void;
 	onCancel: () => void;
+	onFavoritesChange: (favorites: Set<string>) => void;
 }
 
 class ModelPickerComponent {
@@ -117,8 +135,8 @@ class ModelPickerComponent {
 	private catIndex: number;
 	private rowIndex = 0;
 
-	// per-category source models (sorted, never mutated)
-	private byCategory: Map<string, Model<Api>[]>;
+	// per-category source models (sorted, never mutated; Favorites may include invalid rows)
+	private byCategory: Map<string, RowModel[]>;
 
 	// favorite model keys ("provider:id") — persisted to disk
 	private favorites: Set<string>;
@@ -142,7 +160,7 @@ class ModelPickerComponent {
 	private searchInput: Input;
 
 	// filtered models for the current view (recomputed on query/category change)
-	private filteredRows: Model<Api>[] = [];
+	private filteredRows: RowModel[] = [];
 
 	constructor(private opts: ModelPickerOptions) {
 		this.favorites = loadFavorites();
@@ -170,7 +188,7 @@ class ModelPickerComponent {
 		};
 		this.searchInput.onSubmit = () => {
 			const selected = this.filteredRows[this.rowIndex];
-			if (selected) opts.onSelect(selected);
+			if (selected && !isInvalidRow(selected)) opts.onSelect(selected);
 		};
 
 		// Initialise filtered rows and pre-select current model if visible in this category
@@ -178,7 +196,7 @@ class ModelPickerComponent {
 		const cur = this.opts.currentModel;
 		if (cur) {
 			const idx = this.filteredRows.findIndex(
-				(m) => m.id === cur.id && m.provider === cur.provider,
+				(m) => !isInvalidRow(m) && m.id === cur.id && m.provider === cur.provider,
 			);
 			if (idx >= 0) this.rowIndex = idx;
 		}
@@ -192,8 +210,8 @@ class ModelPickerComponent {
 
 	// ── category building ────────────────────────────────────────────────
 
-	private buildCategories(): Map<string, Model<Api>[]> {
-		const map = new Map<string, Model<Api>[]>();
+	private buildCategories(): Map<string, RowModel[]> {
+		const map = new Map<string, RowModel[]>();
 		for (const m of this.opts.allModels) {
 			if (this.hidden.has(modelKey(m))) continue;
 			if (!map.has(m.provider)) map.set(m.provider, []);
@@ -221,23 +239,27 @@ class ModelPickerComponent {
 		});
 
 		// Favorites and Hidden are cross-provider lists pulled from saved keys
-		const entries: [string, Model<Api>[]][] = [
-			[FAVORITES_CATEGORY, this.computeFavoriteModels()],
+		const entries: [string, RowModel[]][] = [
+			[FAVORITES_CATEGORY, this.computeFavoriteRows()],
 		];
 		if (this.showHiddenTab) {
 			entries.push([HIDDEN_CATEGORY, this.computeHiddenModels()]);
 		}
 		entries.push(...providerEntries);
 		entries.push([ALL_CATEGORY, this.computeAllModels()]);
-		return new Map<string, Model<Api>[]>(entries);
+		return new Map<string, RowModel[]>(entries);
 	}
 
-	private computeFavoriteModels(): Model<Api>[] {
-		return this.sortModels(
+	private computeFavoriteRows(): RowModel[] {
+		const available = new Set(this.opts.allModels.map(modelKey));
+		const { valid, stale } = partitionFavoriteKeys(this.favorites, available);
+		const validKeys = new Set(valid);
+		const validModels = this.sortModels(
 			this.opts.allModels.filter(
-				(m) => this.favorites.has(modelKey(m)) && !this.hidden.has(modelKey(m)),
+				(m) => validKeys.has(modelKey(m)) && !this.hidden.has(modelKey(m)),
 			),
 		);
+		return [...validModels, ...stale.map((key) => ({ key, invalid: true as const }))];
 	}
 
 	private computeHiddenModels(): Model<Api>[] {
@@ -264,10 +286,15 @@ class ModelPickerComponent {
 		const selected = this.filteredRows[this.rowIndex];
 		if (!selected) return;
 
-		const key = modelKey(selected);
-		if (this.favorites.has(key)) this.favorites.delete(key);
-		else this.favorites.add(key);
-		saveFavorites(this.favorites);
+		const key = isInvalidRow(selected) ? selected.key : modelKey(selected);
+		const wasFavorite = this.favorites.delete(key);
+		if (!wasFavorite) this.favorites.add(key);
+		if (!saveFavorites(this.favorites)) {
+			if (wasFavorite) this.favorites.add(key);
+			else this.favorites.delete(key);
+			return;
+		}
+		this.opts.onFavoritesChange(this.favorites);
 
 		this.refreshCategories();
 	}
@@ -276,7 +303,7 @@ class ModelPickerComponent {
 
 	private toggleHidden(): void {
 		const selected = this.filteredRows[this.rowIndex];
-		if (!selected) return;
+		if (!selected || isInvalidRow(selected)) return;
 
 		const key = modelKey(selected);
 		if (this.hidden.has(key)) this.hidden.delete(key);
@@ -368,28 +395,30 @@ class ModelPickerComponent {
 		if (query) {
 			result = result.filter(
 				(m) =>
-					m.name.toLowerCase().includes(query) ||
-					m.id.toLowerCase().includes(query),
+					isInvalidRow(m)
+						? m.key.toLowerCase().includes(query)
+						: m.name.toLowerCase().includes(query) ||
+							m.id.toLowerCase().includes(query),
 			);
 		}
 
-		// Apply thinking filter
+		// Attribute filters only apply to resolvable models
 		if (this.filterThinking === true) {
-			result = result.filter((m) => m.reasoning);
+			result = result.filter((m) => !isInvalidRow(m) && m.reasoning);
 		} else if (this.filterThinking === false) {
-			result = result.filter((m) => !m.reasoning);
+			result = result.filter((m) => isInvalidRow(m) || !m.reasoning);
 		}
 
 		// Apply vision filter
 		if (this.filterVision === true) {
-			result = result.filter((m) => m.input.includes("image"));
+			result = result.filter((m) => !isInvalidRow(m) && m.input.includes("image"));
 		} else if (this.filterVision === false) {
-			result = result.filter((m) => !m.input.includes("image"));
+			result = result.filter((m) => isInvalidRow(m) || !m.input.includes("image"));
 		}
 
 		// Apply max token filter
 		if (this.filterMaxTokens !== null) {
-			result = result.filter((m) => m.contextWindow <= this.filterMaxTokens);
+			result = result.filter((m) => isInvalidRow(m) || m.contextWindow <= this.filterMaxTokens);
 		}
 
 		this.filteredRows = result;
@@ -568,6 +597,10 @@ class ModelPickerComponent {
 				const model = visible[i]!;
 				const absIdx = start + i;
 				const isSelected = absIdx === this.rowIndex;
+				if (isInvalidRow(model)) {
+					lines.push(this.renderInvalidRow(model, isSelected, width, theme));
+					continue;
+				}
 				const isCurrent =
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
@@ -688,6 +721,20 @@ class ModelPickerComponent {
 				theme.fg("dim", right)
 			);
 		}
+	}
+
+	private renderInvalidRow(
+		row: { key: string; invalid: true },
+		isSelected: boolean,
+		width: number,
+		theme: any,
+	): string {
+		const prefix = isSelected ? "▶ " : "  ";
+		const right = theme.fg("error", "✗ stale");
+		const label = truncateToWidth(row.key, Math.max(width - visibleWidth(prefix) - 10, 10));
+		const gap = " ".repeat(Math.max(1, width - visibleWidth(prefix + label) - visibleWidth("✗ stale") - 1));
+		const text = prefix + label + gap + right;
+		return isSelected ? theme.fg("accent", text) : theme.fg("dim", text);
 	}
 
 	private renderFilterStatus(theme: any): string {
@@ -1044,6 +1091,9 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 				currentModel: ctx.model ?? undefined,
 				onSelect: (m) => done(m),
 				onCancel: () => done(null),
+				onFavoritesChange: () => {
+					ctx.ui.notify("Favorites saved as Ctrl+P models; restart Pi to apply", "info");
+				},
 			});
 
 			// Give the picker focus so the embedded Input gets IME cursor
@@ -1089,9 +1139,40 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {
-		description: "Select model by provider category with search (Tab/← → switch, ↑↓ navigate)",
-		handler: async (_args, ctx) => {
-			await openPicker(ctx);
+		description: "Select model by provider category, or /models <name> to switch directly to a favorite",
+		getArgumentCompletions: (argumentPrefix) => {
+			const keys = filterFavoriteKeys([...loadFavorites()], argumentPrefix);
+			return keys.length > 0
+				? keys.map((key) => ({ value: key, label: key.replace(":", "/") }))
+				: null;
+		},
+		handler: async (args, ctx) => {
+			const query = args.trim();
+			if (!query) {
+				await openPicker(ctx);
+				return;
+			}
+
+			const favorites = loadFavorites();
+			const key = favorites.has(query) ? query : filterFavoriteKeys([...favorites], query)[0];
+			if (!key) {
+				ctx.ui.notify(`No favorite matches "${query}"`, "warning");
+				return;
+			}
+			const [provider, id] = key.split(":");
+			const model = ctx.modelRegistry.getAvailable().find(
+				(m) => m.provider === provider && m.id === id,
+			);
+			if (!model) {
+				ctx.ui.notify(`Favorite ${key.replace(":", "/")} is not available (stale)`, "error");
+				return;
+			}
+
+			if (await pi.setModel(model)) {
+				ctx.ui.notify(`Model: ${model.name}`, "success");
+			} else {
+				ctx.ui.notify(`No API key for ${model.provider}/${model.id}`, "error");
+			}
 		},
 	});
 

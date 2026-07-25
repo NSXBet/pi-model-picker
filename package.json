@@ -8,6 +8,7 @@
   },
   "files": [
     "index.ts",
+    "settings.ts",
     "scripts/",
     "SKILL.md",
     "CHANGELOG.md",
@@ -23,7 +24,9 @@
     "@earendil-works/pi-tui": "*",
     "@earendil-works/pi-ai": "*"
   },
-  "scripts": {},
+  "scripts": {
+    "test": "bun test"
+  },
   "keywords": [
     "pi-package",
     "pi",
