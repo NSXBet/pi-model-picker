@@ -33,7 +33,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
-import { favoriteKeysToPatterns, filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys } from "./settings";
+import { favoriteKeysToPatterns, filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
 
 // ─── list persistence ──────────────────────────────────────────────────────
 
@@ -799,6 +799,8 @@ type ProviderSpec = {
 	modelsPath?: string; // default "/models"
 	defaults?: ModelDefaults;
 	cacheTtlSeconds?: number; // how long to reuse the cached discovery (default 12h)
+	timeoutMs?: number; // /models fetch timeout (default 5000)
+	hideWhenUnreachable?: boolean; // skip provider when discovery fails instead of using stale cache
 	models?: unknown[]; // static model list; when present, skip /models discovery entirely
 	extraModels?: Record<string, unknown> | unknown[]; // manual models ADDED on top of /models discovery (models.dev nested schema or flat)
 	compat?: Record<string, unknown>; // pi provider compat flags (e.g. supportsDeveloperRole)
@@ -893,7 +895,7 @@ async function fetchModels(spec: ProviderSpec, key: string | undefined) {
 	// are authed — that's spec.authHeader, passed to registerProvider below).
 	if (key) headers["Authorization"] = `Bearer ${key}`;
 
-	const res = await fetch(url, { headers });
+	const res = await fetch(url, { headers, signal: AbortSignal.timeout(spec.timeoutMs ?? 5000) });
 	if (!res.ok) throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
 	const payload = (await res.json()) as { data?: RawModel[] };
 
@@ -936,9 +938,9 @@ async function resolveProvider(
 		return { ok: true, apiKey: key, models };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		if (cached) {
+		if (shouldUseStaleCache(spec, cached !== undefined)) {
 			console.error(`[model-picker] ${spec.name}: refresh failed (${msg}); using stale cache`);
-			return { ok: true, apiKey: cached.apiKey, models: cached.models };
+			return { ok: true, apiKey: cached!.apiKey, models: cached!.models };
 		}
 		console.error(`[model-picker] ${spec.name}: ${msg}`);
 		return { ok: false, error: `${spec.name}: ${msg}` };
@@ -1159,7 +1161,7 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 				ctx.ui.notify(`No favorite matches "${query}"`, "warning");
 				return;
 			}
-			const [provider, id] = key.split(":");
+				const [provider, id] = key.split(":");
 			const model = ctx.modelRegistry.getAvailable().find(
 				(m) => m.provider === provider && m.id === id,
 			);
@@ -1167,12 +1169,13 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 				ctx.ui.notify(`Favorite ${key.replace(":", "/")} is not available (stale)`, "error");
 				return;
 			}
-
-			if (await pi.setModel(model)) {
-				ctx.ui.notify(`Model: ${model.name}`, "success");
-			} else {
+			if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
 				ctx.ui.notify(`No API key for ${model.provider}/${model.id}`, "error");
+				return;
 			}
+
+			await pi.setModel(model);
+			ctx.ui.notify(`Model: ${model.name}`, "success");
 		},
 	});
 

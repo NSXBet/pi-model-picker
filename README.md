@@ -93,6 +93,8 @@ Per-provider fields:
 | `modelsPath` | Discovery path (default `/models`) |
 | `defaults` | Fallback `contextWindow` / `maxTokens` / `input` / `cost` / `reasoning` |
 | `cacheTtlSeconds` | Reuse discovered results this long (default 12h) |
+| `timeoutMs` | `/models` fetch timeout in ms (default 5000) — lower it for VPN-only providers |
+| `hideWhenUnreachable` | Skip the provider entirely when discovery fails instead of registering from stale cache (default `false`). Useful for VPN-only providers: gone when off VPN, back on next start when reachable |
 
 Discovery results and the resolved key are cached under the OS temp dir at
 `$TMPDIR/pi-model-picker/discovery-cache.json` (mode `0600`) so `apiKey`

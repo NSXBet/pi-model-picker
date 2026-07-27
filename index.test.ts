@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys } from "./settings";
+import { filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
 
 describe("patternsToFavoriteKeys", () => {
 	test("splits provider from model on the first slash and preserves colons in ids", () => {
@@ -41,6 +41,14 @@ describe("filterFavoriteKeys", () => {
 
 	test("no match returns empty", () => {
 		expect(filterFavoriteKeys(keys, "zzz")).toEqual([]);
+	});
+});
+
+describe("shouldUseStaleCache", () => {
+	test("uses stale cache only when it exists and provider is not hidden", () => {
+		expect(shouldUseStaleCache({}, true)).toBe(true);
+		expect(shouldUseStaleCache({}, false)).toBe(false);
+		expect(shouldUseStaleCache({ hideWhenUnreachable: true }, true)).toBe(false);
 	});
 });
 

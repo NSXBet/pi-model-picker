@@ -49,6 +49,13 @@ export function filterFavoriteKeys(keys: string[], query: string): string[] {
 		.map((x) => x.key);
 }
 
+export function shouldUseStaleCache(
+	spec: { hideWhenUnreachable?: boolean },
+	hasCache: boolean,
+): boolean {
+	return hasCache && !spec.hideWhenUnreachable;
+}
+
 export function partitionFavoriteKeys(
 	favorites: Set<string>,
 	available: Set<string>,
