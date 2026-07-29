@@ -33,7 +33,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
-import { favoriteKeysToPatterns, filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
+import { favoriteKeysToPatterns, filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
 
 // ─── list persistence ──────────────────────────────────────────────────────
 
@@ -41,6 +41,7 @@ const FAVORITES_CATEGORY = "★ Favorites";
 const HIDDEN_CATEGORY = "◌ Hidden";
 const ALL_CATEGORY = "✓ All";
 const STORAGE_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-model-picker");
+const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
 const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
 
 function modelKey(m: Model<Api>): string {
@@ -69,21 +70,23 @@ function saveModelKeys(file: string, keys: Set<string>): boolean {
 }
 
 function loadFavorites(): Set<string> {
+	let patterns: string[] = [];
 	try {
-		const settings = SettingsManager.create(process.cwd(), getAgentDir());
-		return new Set(patternsToFavoriteKeys(settings.getEnabledModels() ?? []));
+		patterns = SettingsManager.create(process.cwd(), getAgentDir()).getEnabledModels() ?? [];
 	} catch {
-		return new Set();
+		// settings unreadable — fall back to the file only
 	}
+	return new Set(mergeFavoriteKeys([...loadModelKeys(FAVORITES_FILE)], patterns));
 }
 
 function saveFavorites(favs: Set<string>): boolean {
+	const fileOk = saveModelKeys(FAVORITES_FILE, favs);
 	try {
 		SettingsManager.create(process.cwd(), getAgentDir()).setEnabledModels(favoriteKeysToPatterns(favs));
-		return true;
 	} catch {
 		return false;
 	}
+	return fileOk;
 }
 
 function loadHidden(): Set<string> {

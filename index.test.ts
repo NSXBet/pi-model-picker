@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
+import { filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
 
 describe("patternsToFavoriteKeys", () => {
 	test("splits provider from model on the first slash and preserves colons in ids", () => {
@@ -41,6 +41,24 @@ describe("filterFavoriteKeys", () => {
 
 	test("no match returns empty", () => {
 		expect(filterFavoriteKeys(keys, "zzz")).toEqual([]);
+	});
+});
+
+describe("toggleIgnoredProvider", () => {
+	test("adds then removes a provider, preserving order", () => {
+		expect(toggleIgnoredProvider(["aihub"], "ollama")).toEqual(["aihub", "ollama"]);
+		expect(toggleIgnoredProvider(["aihub", "ollama"], "aihub")).toEqual(["ollama"]);
+	});
+});
+
+describe("mergeFavoriteKeys", () => {
+	test("unions file keys and settings patterns, file order first, deduped", () => {
+		expect(
+			mergeFavoriteKeys(
+				["aihub:kimi-k3", "anthropic:claude-opus-4"],
+				["anthropic/claude-opus-4", "ollama/qwen3:latest"],
+			),
+		).toEqual(["aihub:kimi-k3", "anthropic:claude-opus-4", "ollama:qwen3:latest"]);
 	});
 });
 

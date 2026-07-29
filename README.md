@@ -35,12 +35,12 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 
 ## Favorites and Ctrl+P
 
-Favorites **are** Pi's native scoped-models scope — there is no separate list. The Favorites tab reads and writes Pi's `enabledModels` setting directly, the same scope you see in `/scoped-models` and cycle through with `Ctrl+P` / `Shift+Ctrl+P`.
+Favorites live in **two stores kept in sync**: Pi's native `enabledModels` setting (drives `Ctrl+P` cycling and `/scoped-models`) and the extension's `favorites.json`. Pressing `Ctrl+F` writes the full list to both; the tab shows the **union** of both stores on open, so entries added by either path appear.
 
 How it works:
 
-- Pressing `Ctrl+F` rewrites `enabledModels` as exact `provider/model` entries, preserving order — that order is the Ctrl+P cycling order
-- Editing the scope in `/scoped-models` (and saving with `Ctrl+S`) **is** editing your favorites — the tab reflects it on next open. One list, two editors
+- Pressing `Ctrl+F` rewrites `enabledModels` and `favorites.json` as exact entries, preserving order — that order is the Ctrl+P cycling order
+- Editing the scope in `/scoped-models` (and saving with `Ctrl+S`) adds to your favorites via the union on next open — one logical list, two editors
 - A favorite that no longer resolves to an available model (provider renamed, model removed, auth missing) is kept but shown dimmed with a red `✗ stale` marker at the end of the Favorites tab. It also keeps generating `Warning: No models match pattern ...` at startup until you drop it with `Ctrl+F` on the stale row
 - Wildcard patterns written by `/scoped-models` (e.g. `claude-*`) can't map to one model row, so they still cycle with Ctrl+P but don't appear in the Favorites tab
 

@@ -49,6 +49,19 @@ export function filterFavoriteKeys(keys: string[], query: string): string[] {
 		.map((x) => x.key);
 }
 
+export function toggleIgnoredProvider(ignored: string[], name: string): string[] {
+	return ignored.includes(name) ? ignored.filter((p) => p !== name) : [...ignored, name];
+}
+
+export function mergeFavoriteKeys(fileKeys: string[], settingsPatterns: string[]): string[] {
+	const merged = [...fileKeys];
+	const seen = new Set(fileKeys);
+	for (const key of patternsToFavoriteKeys(settingsPatterns)) {
+		if (!seen.has(key)) merged.push(key);
+	}
+	return merged;
+}
+
 export function shouldUseStaleCache(
 	spec: { hideWhenUnreachable?: boolean },
 	hasCache: boolean,
