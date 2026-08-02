@@ -33,7 +33,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
-import { favoriteKeysToPatterns, filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache } from "./settings";
+import { favoriteKeysToPatterns, filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
 
 // ─── list persistence ──────────────────────────────────────────────────────
 
@@ -43,6 +43,38 @@ const ALL_CATEGORY = "✓ All";
 const STORAGE_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-model-picker");
 const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
 const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
+const GLOBAL_CONFIG_FILE = join(STORAGE_DIR, "config.json");
+const LOCAL_CONFIG_FILE = join(process.cwd(), ".pi", "extensions", "pi-model-picker.json");
+
+function readIgnoredProviders(file: string): string[] {
+	try {
+		if (!existsSync(file)) return [];
+		const cfg = JSON.parse(readFileSync(file, "utf8"));
+		return Array.isArray(cfg.ignoredProviders)
+			? cfg.ignoredProviders.filter((x: unknown) => typeof x === "string")
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+function loadIgnoredProviders(): Set<string> {
+	return new Set([...readIgnoredProviders(GLOBAL_CONFIG_FILE), ...readIgnoredProviders(LOCAL_CONFIG_FILE)]);
+}
+
+function saveIgnoredProviders(ignored: Set<string>): boolean {
+	try {
+		const cfg = existsSync(GLOBAL_CONFIG_FILE)
+			? JSON.parse(readFileSync(GLOBAL_CONFIG_FILE, "utf8"))
+			: {};
+		cfg.ignoredProviders = [...ignored];
+		mkdirSync(dirname(GLOBAL_CONFIG_FILE), { recursive: true });
+		writeFileSync(GLOBAL_CONFIG_FILE, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function modelKey(m: Model<Api>): string {
 	return `${m.provider}:${m.id}`;
@@ -138,6 +170,7 @@ function isInvalidRow(row: RowModel): row is { key: string; invalid: true } {
 interface ModelPickerOptions {
 	allModels: Model<Api>[];
 	currentModel: Model<Api> | undefined;
+	ignoredProviders: Set<string>;
 	onSelect: (model: Model<Api>) => void;
 	onCancel: () => void;
 	onFavoritesChange: (favorites: Set<string>) => void;
@@ -162,6 +195,9 @@ class ModelPickerComponent {
 
 	// whether to show the Hidden category tab
 	private showHiddenTab = false;
+
+	// whether the ? help overlay is showing
+	private showHelp = false;
 
 	// filters
 	private filterThinking: boolean | null = null;
@@ -229,6 +265,7 @@ class ModelPickerComponent {
 	private buildCategories(): Map<string, RowModel[]> {
 		const map = new Map<string, RowModel[]>();
 		for (const m of this.opts.allModels) {
+			if (this.opts.ignoredProviders.has(m.provider)) continue;
 			if (this.hidden.has(modelKey(m))) continue;
 			if (!map.has(m.provider)) map.set(m.provider, []);
 			map.get(m.provider)!.push(m);
@@ -267,13 +304,12 @@ class ModelPickerComponent {
 	}
 
 	private computeFavoriteRows(): RowModel[] {
-		const available = new Set(this.opts.allModels.map(modelKey));
+		const visible = this.opts.allModels.filter((m) => !this.opts.ignoredProviders.has(m.provider));
+		const available = new Set(visible.map(modelKey));
 		const { valid, stale } = partitionFavoriteKeys(this.favorites, available);
 		const validKeys = new Set(valid);
 		const validModels = this.sortModels(
-			this.opts.allModels.filter(
-				(m) => validKeys.has(modelKey(m)) && !this.hidden.has(modelKey(m)),
-			),
+			visible.filter((m) => validKeys.has(modelKey(m)) && !this.hidden.has(modelKey(m))),
 		);
 		return [...validModels, ...stale.map((key) => ({ key, invalid: true as const }))];
 	}
@@ -293,7 +329,9 @@ class ModelPickerComponent {
 	}
 
 	private computeAllModels(): Model<Api>[] {
-		return this.sortModels([...this.opts.allModels]);
+		return this.sortModels(
+			this.opts.allModels.filter((m) => !this.opts.ignoredProviders.has(m.provider)),
+		);
 	}
 
 	// ── favorites toggle ────────────────────────────────────────────────
@@ -462,6 +500,18 @@ class ModelPickerComponent {
 	// ── input handling ───────────────────────────────────────────────────
 
 	handleInput(data: string): void {
+		// help overlay: any key dismisses it
+		if (this.showHelp) {
+			this.showHelp = false;
+			return;
+		}
+
+		// ? — show all commands (only when search field is empty, like ←/→)
+		if (data === "?" && this.searchInput.getValue() === "") {
+			this.showHelp = true;
+			return;
+		}
+
 		// ↑ / ↓ — navigate the list with wraparound
 		if (matchesKey(data, Key.up)) {
 			this.rowIndex =
@@ -564,6 +614,8 @@ class ModelPickerComponent {
 	// ── rendering ────────────────────────────────────────────────────────
 
 	render(width: number, theme: any): string[] {
+		if (this.showHelp) return this.renderHelp(width, theme);
+
 		const lines: string[] = [];
 
 		// ── tab bar ──────────────────────────────────────────────────────
@@ -643,9 +695,41 @@ class ModelPickerComponent {
 		if (filtersActive) {
 			help += " · Ctrl+BS clear";
 		}
-		help += " · esc";
+		help += " · ? help · esc";
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
+		return lines;
+	}
+
+	private renderHelp(width: number, theme: any): string[] {
+		const rows: [string, string][] = [
+			["↑ / ↓", "navigate list"],
+			["Tab / Shift+Tab", "switch category"],
+			["← / →", "switch category (empty search)"],
+			["enter", "select model"],
+			["Ctrl+F", "toggle favorite (Ctrl+P scope)"],
+			["Ctrl+H", "hide / unhide model"],
+			["Ctrl+Shift+H", "toggle Hidden tab"],
+			["Ctrl+T", "cycle thinking filter"],
+			["Ctrl+V", "cycle vision filter"],
+			["Ctrl+[ / Ctrl+]", "decrease / increase token filter"],
+			["Ctrl+Backspace", "clear all filters"],
+			["?", "this help"],
+			["esc", "close picker"],
+			["/models", "open picker · /models <fav> switch"],
+			["/providers", "hide / show whole providers"],
+			["Ctrl+Shift+M", "open picker (shortcut)"],
+		];
+		const keyW = Math.max(...rows.map(([k]) => visibleWidth(k)));
+		const lines: string[] = [];
+		lines.push(theme.fg("accent", theme.bold("  Model Picker — commands")));
+		lines.push(theme.fg("border", "─".repeat(width)));
+		for (const [k, desc] of rows) {
+			const pad = " ".repeat(keyW - visibleWidth(k));
+			lines.push(truncateToWidth("  " + theme.fg("text", k + pad) + "  " + theme.fg("muted", desc), width));
+		}
+		lines.push(theme.fg("border", "─".repeat(width)));
+		lines.push(theme.fg("dim", "  press any key to return"));
 		return lines;
 	}
 
@@ -1108,6 +1192,7 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 			const picker = new ModelPickerComponent({
 				allModels,
 				currentModel: ctx.model ?? undefined,
+				ignoredProviders: loadIgnoredProviders(),
 				onSelect: (m) => done(m),
 				onCancel: () => done(null),
 				onFavoritesChange: () => {
@@ -1155,6 +1240,74 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(`Model: ${selected.name}`, "success");
 		}
 	}
+
+	// ── provider visibility toggle ────────────────────────────────────────
+	async function openProviderToggles(ctx: ExtensionContext) {
+		ctx.modelRegistry.refresh();
+		const allModels = ctx.modelRegistry.getAvailable();
+		if (allModels.length === 0) {
+			ctx.ui.notify("No models available", "warning");
+			return;
+		}
+
+		await ctx.ui.custom<null>((tui, theme, _kb, done) => {
+			let ignored = loadIgnoredProviders();
+			let rowIndex = 0;
+			const counts = new Map<string, number>();
+			for (const m of allModels) counts.set(m.provider, (counts.get(m.provider) ?? 0) + 1);
+			const providers = [...counts.keys()].sort((a, b) => a.localeCompare(b));
+
+			const header = new Container();
+			header.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+			header.addChild(new Text(theme.fg("accent", theme.bold("  Providers (enter hides/shows in /models)")), 0, 0));
+			const footer = new DynamicBorder((s: string) => theme.fg("accent", s));
+
+			return {
+				focused: true,
+				render(width: number): string[] {
+					const lines = [...header.render(width)];
+					providers.forEach((p, i) => {
+						const sel = i === rowIndex;
+						const off = ignored.has(p);
+						const label = `${sel ? "▶ " : "  "}${off ? "✗" : "✓"} ${providerLabel(p)}  ${counts.get(p)} models`;
+						lines.push(truncateToWidth(
+							sel ? theme.fg("accent", label) : off ? theme.fg("dim", label) : theme.fg("text", label),
+							width,
+						));
+					});
+					lines.push(theme.fg("border", "─".repeat(width)));
+					lines.push(theme.fg("dim", "  ↑↓ nav · enter toggle · esc"));
+					lines.push(...footer.render(width));
+					return lines;
+				},
+				invalidate() {
+					header.invalidate();
+				},
+				handleInput(data: string) {
+					if (matchesKey(data, Key.escape)) {
+						done(null);
+						return;
+					}
+					if (matchesKey(data, Key.up)) {
+						rowIndex = rowIndex === 0 ? providers.length - 1 : rowIndex - 1;
+					} else if (matchesKey(data, Key.down)) {
+						rowIndex = rowIndex === providers.length - 1 ? 0 : rowIndex + 1;
+					} else if (matchesKey(data, Key.enter)) {
+						const next = new Set(toggleIgnoredProvider([...ignored], providers[rowIndex]!));
+						if (saveIgnoredProviders(next)) ignored = next;
+					}
+					tui.requestRender();
+				},
+			};
+		});
+	}
+
+	pi.registerCommand("providers", {
+		description: "Toggle provider visibility in the picker (writes ignoredProviders to global config)",
+		handler: async (_args, ctx) => {
+			await openProviderToggles(ctx);
+		},
+	});
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {

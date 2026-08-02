@@ -92,6 +92,7 @@ Per-provider fields:
 | `reasoningFilter` | Regex on model id; matches get `reasoning: true` |
 | `modelsPath` | Discovery path (default `/models`) |
 | `defaults` | Fallback `contextWindow` / `maxTokens` / `input` / `cost` / `reasoning` |
+| `ignoredProviders` | Provider names hidden from the picker UI (tabs, All, and Favorites — they stay in Ctrl+P). Written by `/providers`; also read from project-local `.pi/extensions/pi-model-picker.json` (union of both) |
 | `cacheTtlSeconds` | Reuse discovered results this long (default 12h) |
 | `timeoutMs` | `/models` fetch timeout in ms (default 5000) — lower it for VPN-only providers |
 | `hideWhenUnreachable` | Skip the provider entirely when discovery fails instead of registering from stale cache (default `false`). Useful for VPN-only providers: gone when off VPN, back on next start when reachable |
@@ -132,6 +133,7 @@ Restart pi.
 | Trigger | Description |
 |---------|-------------|
 | `/models` | Open the categorized picker |
+| `/providers` | Toggle provider visibility (`enter` hides/shows, `esc` closes) |
 | `/models <favorite>` | Switch directly to a favorite; `Tab` autocompletes favorite names (`/models gpt<Tab>`). With no exact match, the first partial match is used |
 | `Ctrl+Shift+M` | Keyboard shortcut |
 
