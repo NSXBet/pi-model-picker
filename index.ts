@@ -111,6 +111,19 @@ function fmtCtx(tokens: number): string {
 	return String(tokens);
 }
 
+/** Format $/1M-token rate, trimming trailing zeros ($0 shown as "free") */
+function fmtRate(n: number): string {
+	if (n === 0) return "free";
+	return `$${n % 1 === 0 ? n : n.toFixed(2)}`;
+}
+
+/** Format a model's cost as "in/out" per 1M tokens, e.g. "$1/$5" */
+function fmtCost(cost: Model<Api>["cost"] | undefined): string {
+	if (!cost) return "";
+	if (cost.input === 0 && cost.output === 0) return "free";
+	return `${fmtRate(cost.input)}/${fmtRate(cost.output)}`;
+}
+
 // ─── component ──────────────────────────────────────────────────────────────
 
 type RowModel = Model<Api> | { key: string; invalid: true };
@@ -690,7 +703,8 @@ class ModelPickerComponent {
 		if (model.reasoning) tags.push("thinking");
 		if (model.input.includes("image")) tags.push("vision");
 		const provider = showProvider ? `${providerLabel(model.provider)}  ` : "";
-		const right = `${provider}${ctxStr}  ${tags.join(" ")}`;
+		const costStr = fmtCost(model.cost);
+		const right = `${provider}${costStr ? costStr + "  " : ""}${ctxStr}  ${tags.join(" ")}`;
 
 		const favMark = isFavorite ? " ★" : "";
 		const hiddenMark = isHidden ? " ◌" : "";
