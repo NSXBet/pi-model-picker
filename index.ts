@@ -987,6 +987,14 @@ type RawModel = {
 	max_input_tokens?: number;
 	max_output_tokens?: number;
 	max_tokens?: number;
+	// LiteLLM-style gateways (aihub) nest real limits + features here.
+	capabilities?: {
+		max_input_tokens?: number;
+		max_output_tokens?: number;
+		max_tokens?: number;
+		supports_reasoning?: boolean;
+		supports_vision?: boolean;
+	};
 };
 
 async function fetchModels(spec: ProviderSpec, key: string | undefined) {
@@ -1008,16 +1016,26 @@ async function fetchModels(spec: ProviderSpec, key: string | undefined) {
 		.filter((m) => typeof m.id === "string" && m.id.length > 0)
 		.filter((m) => !m.status || m.status === "available")
 		.filter((m) => !idRe || idRe.test(m.id!))
-		.map((m) => ({
-			id: m.id!,
-			name: m.id!,
-			reasoning: reasoningRe ? reasoningRe.test(m.id!) : (d.reasoning ?? false),
-			input: d.input ?? ["text"],
-			cost: d.cost ?? ZERO_COST,
-			// Prefer real per-model limits from /models; fall back to configured defaults.
-			contextWindow: m.max_input_tokens ?? m.context_window ?? d.contextWindow ?? 128000,
-			maxTokens: m.max_output_tokens ?? m.max_tokens ?? d.maxTokens ?? 4096,
-		}));
+		.map((m) => {
+			const caps = m.capabilities ?? {};
+			return {
+				id: m.id!,
+				name: m.id!,
+				reasoning: reasoningRe
+					? reasoningRe.test(m.id!)
+					: (caps.supports_reasoning ?? d.reasoning ?? false),
+				input:
+					caps.supports_vision === true
+						? Array.from(new Set([...(d.input ?? ["text"]), "image"]))
+						: (d.input ?? ["text"]),
+				cost: d.cost ?? ZERO_COST,
+				// Prefer real per-model limits from /models (flat or nested under
+				// `capabilities`); fall back to configured defaults.
+				contextWindow:
+					m.max_input_tokens ?? m.context_window ?? caps.max_input_tokens ?? d.contextWindow ?? 128000,
+				maxTokens: m.max_output_tokens ?? m.max_tokens ?? caps.max_output_tokens ?? caps.max_tokens ?? d.maxTokens ?? 4096,
+			};
+		});
 }
 
 // resolveProvider returns the key + models to register, using the cache when
@@ -1061,7 +1079,11 @@ function normalizeExtraModels(spec: ProviderSpec): Record<string, unknown>[] {
 
 	return entries
 		.map(([key, m]) => {
-			const id = String(m.id ?? key).split("/").pop() ?? "";
+			// Preserve the provider-qualified id when the key has one ("aihub/x"),
+			// so extras override discovered models with the same gateway id instead
+			// of registering a duplicate bare-id entry that never collides.
+			const rawId = String(m.id ?? key);
+			const id = rawId.includes("/") ? rawId : (rawId.split("/").pop() ?? "");
 			if (!id) return null;
 			const input = ((m.modalities?.input ?? m.input ?? d.input ?? ["text"]) as string[]).filter(
 				(x) => x === "text" || x === "image",
@@ -1090,11 +1112,20 @@ function normalizeExtraModels(spec: ProviderSpec): Record<string, unknown>[] {
 }
 
 // Merge discovered models with manual extras; extras override on id collision.
-function mergeModels(base: unknown[], extra: Record<string, unknown>[]): unknown[] {
+// An extra matches a discovered model when ids are equal, or when the extra's
+// bare id equals the discovered id with the provider prefix stripped (so
+// `claude-opus-5` overrides discovered `aihub/claude-opus-5` instead of
+// registering a duplicate).
+function mergeModels(base: unknown[], extra: Record<string, unknown>[], providerName?: string): unknown[] {
 	if (extra.length === 0) return base;
 	const byId = new Map<string, unknown>();
 	for (const m of base as Record<string, unknown>[]) byId.set(String(m.id), m);
-	for (const m of extra) byId.set(String(m.id), m);
+	for (const m of extra) {
+		const id = String(m.id);
+		const qualified = providerName ? `${providerName}/${id}` : null;
+		const key = byId.has(id) ? id : qualified && byId.has(qualified) ? qualified : id;
+		byId.set(key, { ...m, id: key });
+	}
 	return [...byId.values()];
 }
 
@@ -1142,7 +1173,7 @@ async function registerDiscoveredProviders(pi: ExtensionAPI): Promise<string[]> 
 			}
 		}
 
-		const models = mergeModels(baseModels, normalizeExtraModels(spec));
+		const models = mergeModels(baseModels, normalizeExtraModels(spec), spec.name);
 		if ((models as unknown[]).length === 0) continue;
 
 		pi.registerProvider(spec.name, {
