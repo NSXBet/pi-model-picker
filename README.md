@@ -53,7 +53,31 @@ any OpenAI-compatible provider at startup. Configure providers once in a
 `pi-model-picker.json` file and every model returned by their `/models` endpoint
 is registered automatically (no hand-listing in `models.json`).
 
-The file is looked up, first match wins, in:
+## OMP (oh-my-pi) support
+
+The same entrypoint runs under both pi and [omp](https://github.com/can1357/oh-my-pi).
+Link it once and both agents pick it up:
+
+```bash
+omp plugin link /path/to/pi-model-picker
+```
+
+Runtime differences:
+
+- **Paths follow the agent**: state lives in `~/.pi/agent/extensions/pi-model-picker/`
+  under pi and `~/.omp/agent/extensions/pi-model-picker/` under omp — favorites,
+  hidden models, and provider config are kept per-runtime.
+- **Commands**: omp ships builtin `/models` and `/providers` that shadow same-named
+  extension commands, so under omp the picker registers `/pick-model` and
+  `/pick-providers`. Same UI, same keybindings (`Ctrl+Shift+M`).
+- **Providers**: omp's native `models.yml` (with `openai-models-list` discovery)
+  usually already defines the gateways. Keep `modelProviders` empty in the omp-side
+  `config.json` and the picker browses omp's own model registry; extension-registered
+  models merge in on top if you do list any.
+- **Favorites**: omp's settings facade has no `enabledModels`, so `favorites.json` is
+  the single store there (no Ctrl+P scope under omp).
+
+The file is looked up, first match wins, in (`.pi` becomes `.omp` under omp):
 
 1. `~/.pi/agent/extensions/pi-model-picker/config.json` (global, in extension folder)
 2. `./.pi/extensions/pi-model-picker.json` (project)

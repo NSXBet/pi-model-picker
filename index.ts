@@ -18,14 +18,17 @@
  *   └─────────────────────────────────────────────────┘
  *
  * Usage:
- *   /models          — open the categorized picker
- *   Ctrl+Shift+M     — keyboard shortcut
+ *   /models (pi) / /pick-model (omp) — open the categorized picker
+ *   /providers (pi) / /pick-providers (omp) — toggle provider visibility
+ *   Ctrl+Shift+M — keyboard shortcut
  *
- * Note: /model is a built-in pi command and cannot be overridden.
+ * Note: /model is a built-in pi command and cannot be overridden. OMP ships
+ * its own /models and /providers builtins, so this extension registers
+ * /pick-model and /pick-providers when running under OMP.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawnSync } from "node:child_process";
@@ -40,11 +43,14 @@ import { favoriteKeysToPatterns, filterFavoriteKeys, mergeFavoriteKeys, patterns
 const FAVORITES_CATEGORY = "★ Favorites";
 const HIDDEN_CATEGORY = "◌ Hidden";
 const ALL_CATEGORY = "✓ All";
-const STORAGE_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-model-picker");
+// getAgentDir() resolves to ~/.pi/agent under pi and ~/.omp/agent under omp
+// (omp sets PI_CODING_AGENT_DIR); CONFIG_DIR_NAME is ".pi" / ".omp" likewise,
+// so storage and per-project config follow the running agent.
+const STORAGE_DIR = join(getAgentDir(), "extensions", "pi-model-picker");
 const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
 const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
 const GLOBAL_CONFIG_FILE = join(STORAGE_DIR, "config.json");
-const LOCAL_CONFIG_FILE = join(process.cwd(), ".pi", "extensions", "pi-model-picker.json");
+const LOCAL_CONFIG_FILE = join(process.cwd(), CONFIG_DIR_NAME, "extensions", "pi-model-picker.json");
 
 function readIgnoredProviders(file: string): string[] {
 	try {
@@ -101,24 +107,41 @@ function saveModelKeys(file: string, keys: Set<string>): boolean {
 	}
 }
 
-function loadFavorites(): Set<string> {
-	let patterns: string[] = [];
+// Settings-backed favorites (pi's enabledModels) are a bonus layer on top of
+// favorites.json. OMP's SettingsManager facade lacks get/setEnabledModels and
+// returns a promise, so probe for the sync methods and skip cleanly.
+function readSettingsFavorites(): string[] {
 	try {
-		patterns = SettingsManager.create(process.cwd(), getAgentDir()).getEnabledModels() ?? [];
+		const sm = SettingsManager.create(process.cwd(), getAgentDir()) as unknown as {
+			getEnabledModels?: () => string[] | undefined;
+		};
+		return typeof sm.getEnabledModels === "function" ? (sm.getEnabledModels() ?? []) : [];
 	} catch {
 		// settings unreadable — fall back to the file only
+		return [];
 	}
-	return new Set(mergeFavoriteKeys([...loadModelKeys(FAVORITES_FILE)], patterns));
+}
+
+function writeSettingsFavorites(patterns: string[]): boolean {
+	try {
+		const sm = SettingsManager.create(process.cwd(), getAgentDir()) as unknown as {
+			setEnabledModels?: (patterns: string[]) => void;
+		};
+		if (typeof sm.setEnabledModels !== "function") return true; // not supported here; file copy already saved
+		sm.setEnabledModels(patterns);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function loadFavorites(): Set<string> {
+	return new Set(mergeFavoriteKeys([...loadModelKeys(FAVORITES_FILE)], readSettingsFavorites()));
 }
 
 function saveFavorites(favs: Set<string>): boolean {
 	const fileOk = saveModelKeys(FAVORITES_FILE, favs);
-	try {
-		SettingsManager.create(process.cwd(), getAgentDir()).setEnabledModels(favoriteKeysToPatterns(favs));
-	} catch {
-		return false;
-	}
-	return fileOk;
+	return writeSettingsFavorites(favoriteKeysToPatterns(favs)) && fileOk;
 }
 
 function loadHidden(): Set<string> {
@@ -957,10 +980,10 @@ function loadSpecs(): ProviderSpec[] {
 	const target = join(STORAGE_DIR, "config.json");
 	const candidates = [
 		target,
-		join(process.cwd(), ".pi", "extensions", "pi-model-picker.json"),
-		join(homedir(), ".pi", "agent", "extensions", "pi-model-picker.json"),
-		join(process.cwd(), ".pi", "pi-model-picker.json"),
-		join(homedir(), ".pi", "pi-model-picker.json"),
+		join(process.cwd(), CONFIG_DIR_NAME, "extensions", "pi-model-picker.json"),
+		join(getAgentDir(), "extensions", "pi-model-picker.json"),
+		join(process.cwd(), CONFIG_DIR_NAME, "pi-model-picker.json"),
+		join(homedir(), CONFIG_DIR_NAME, "pi-model-picker.json"),
 	];
 	for (const c of candidates) {
 		try {
@@ -1333,16 +1356,19 @@ export default async function modelPickerExtension(pi: ExtensionAPI) {
 		});
 	}
 
-	pi.registerCommand("providers", {
+	// OMP ships builtin /models and /providers that shadow same-named extension
+	// commands, so register distinct names when running under it.
+	const isOmp = getAgentDir().includes(`${path.sep}.omp`);
+	pi.registerCommand(isOmp ? "pick-providers" : "providers", {
 		description: "Toggle provider visibility in the picker (writes ignoredProviders to global config)",
 		handler: async (_args, ctx) => {
 			await openProviderToggles(ctx);
 		},
 	});
 
-	// /model is a reserved built-in — use /models instead
-	pi.registerCommand("models", {
-		description: "Select model by provider category, or /models <name> to switch directly to a favorite",
+	// /model is a reserved built-in in pi; /models is one in OMP — alias accordingly.
+	pi.registerCommand(isOmp ? "pick-model" : "models", {
+		description: `Select model by provider category, or /${isOmp ? "pick-model" : "models"} <name> to switch directly to a favorite`,
 		getArgumentCompletions: (argumentPrefix) => {
 			const keys = filterFavoriteKeys([...loadFavorites()], argumentPrefix);
 			return keys.length > 0

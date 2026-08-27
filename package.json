@@ -1,6 +1,6 @@
 {
   "name": "pi-model-picker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Categorized, keyboard-driven model selector for the pi coding agent",
   "type": "module",
   "bin": {
@@ -15,6 +15,11 @@
     "README.md"
   ],
   "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "omp": {
     "extensions": [
       "./index.ts"
     ]
