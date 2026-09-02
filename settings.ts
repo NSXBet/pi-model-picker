@@ -53,6 +53,10 @@ export function toggleIgnoredProvider(ignored: string[], name: string): string[]
 	return ignored.includes(name) ? ignored.filter((p) => p !== name) : [...ignored, name];
 }
 
+export function matchesModelIgnorePattern(id: string, pattern: string | undefined): boolean {
+	return pattern !== undefined && new RegExp(pattern).test(id);
+}
+
 export function mergeFavoriteKeys(fileKeys: string[], settingsPatterns: string[]): string[] {
 	const merged = [...fileKeys];
 	const seen = new Set(fileKeys);

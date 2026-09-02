@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
+import { filterFavoriteKeys, matchesModelIgnorePattern, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
 
 describe("patternsToFavoriteKeys", () => {
 	test("splits provider from model on the first slash and preserves colons in ids", () => {
@@ -44,6 +44,14 @@ describe("filterFavoriteKeys", () => {
 	});
 });
 
+describe("matchesModelIgnorePattern", () => {
+	test("excludes only matching model identifiers", () => {
+		const pattern = "^bedrock/mistral\\.mixtral-8x7b-instruct-v0:1$";
+		expect(matchesModelIgnorePattern("bedrock/mistral.mixtral-8x7b-instruct-v0:1", pattern)).toBe(true);
+		expect(matchesModelIgnorePattern("bedrock/mistral.mistral-small-2402-v1:0", pattern)).toBe(false);
+		expect(matchesModelIgnorePattern("bedrock/mistral.mixtral-8x7b-instruct-v0:1", undefined)).toBe(false);
+	});
+});
 describe("toggleIgnoredProvider", () => {
 	test("adds then removes a provider, preserving order", () => {
 		expect(toggleIgnoredProvider(["aihub"], "ollama")).toEqual(["aihub", "ollama"]);

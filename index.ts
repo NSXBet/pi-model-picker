@@ -36,7 +36,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from "
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import path from "node:path";
-import { favoriteKeysToPatterns, filterFavoriteKeys, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
+import { favoriteKeysToPatterns, filterFavoriteKeys, matchesModelIgnorePattern, mergeFavoriteKeys, patternsToFavoriteKeys, partitionFavoriteKeys, shouldUseStaleCache, toggleIgnoredProvider } from "./settings";
 
 // ─── list persistence ──────────────────────────────────────────────────────
 
@@ -894,11 +894,11 @@ class ModelPickerComponent {
 // ─── dynamic provider discovery ──────────────────────────────────────────────
 //
 // Instead of hand-listing models in models.json, configure a provider once
-// (url + credentials + api) under `modelProviders` in pi-model-picker.json, and
-// the picker scrapes its `/models` endpoint at startup and registers every
-// model it finds (optionally filtered by a regex on the model id). This runs in
-// the extension *factory* so discovered models are available to interactive
-// startup and to `pi --list-models`.
+// (url + credentials + api) under `modelProviders` in pi-model-picker.json.
+// The picker scrapes its `/models` endpoint at startup and registers matching
+// entries, excluding any whose id matches the optional `ignore` regex. This
+// runs in the extension *factory* so discovered models are available to
+// interactive startup and to `pi --list-models`.
 
 type ModelInput = "text" | "image";
 type Cost = { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -919,6 +919,7 @@ type ProviderSpec = {
 	authHeader?: boolean; // default true (Authorization: Bearer)
 	headers?: Record<string, string>;
 	filter?: string; // regex: model id must match to be included (default: all)
+	ignore?: string; // regex: matching model ids are excluded after inclusion filtering
 	reasoningFilter?: string; // regex: matching ids get reasoning:true
 	modelsPath?: string; // default "/models"
 	defaults?: ModelDefaults;
@@ -1039,6 +1040,7 @@ async function fetchModels(spec: ProviderSpec, key: string | undefined) {
 		.filter((m) => typeof m.id === "string" && m.id.length > 0)
 		.filter((m) => !m.status || m.status === "available")
 		.filter((m) => !idRe || idRe.test(m.id!))
+		.filter((m) => !matchesModelIgnorePattern(m.id!, spec.ignore))
 		.map((m) => {
 			const caps = m.capabilities ?? {};
 			return {

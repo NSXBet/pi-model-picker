@@ -113,6 +113,7 @@ Per-provider fields:
 | `authHeader` | Send `Authorization: Bearer` on chat requests (default `true`) |
 | `headers` | Extra request headers |
 | `filter` | Regex on model id; only matching ids are registered (empty = all) |
+| `ignore` | Regex on model id; matching ids are excluded after `filter` is applied |
 | `reasoningFilter` | Regex on model id; matches get `reasoning: true` |
 | `modelsPath` | Discovery path (default `/models`) |
 | `defaults` | Fallback `contextWindow` / `maxTokens` / `input` / `cost` / `reasoning` |
